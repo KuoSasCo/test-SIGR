@@ -13,43 +13,38 @@ app = Flask(__name__)
 CORS(app)
 
 # ── Configuración AWS ──────────────────────────────────────────
-AWS_ACCESS_KEY     = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_KEY     = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_REGION         = os.getenv("AWS_REGION", "us-east-1")
-S3_BUCKET          = os.getenv("S3_BUCKET")
-REKOGNITION_MODEL  = os.getenv("REKOGNITION_MODEL_ARN")
-MIN_CONFIDENCE     = float(os.getenv("MIN_CONFIDENCE", "50"))
+AWS_ACCESS_KEY    = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_KEY    = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION        = os.getenv("AWS_REGION", "us-east-1")
+S3_BUCKET         = os.getenv("S3_BUCKET")
+REKOGNITION_MODEL = os.getenv("REKOGNITION_MODEL_ARN")
+MIN_CONFIDENCE    = float(os.getenv("MIN_CONFIDENCE", "50"))
 
 # ── Configuración MySQL ────────────────────────────────────────
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = int(os.getenv("DB_PORT", "3306"))
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
-DB_PASS = os.getenv("DB_PASS")
+DB_HOST = os.getenv("MYSQLHOST")
+DB_PORT = int(os.getenv("MYSQLPORT", "3306"))
+DB_NAME = os.getenv("MYSQL_DATABASE")
+DB_USER = os.getenv("MYSQLUSER")
+DB_PASS = os.getenv("MYSQLPASSWORD")
 
 
 def get_db():
-    """Retorna una conexión activa a MySQL."""
     return mysql.connector.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
+        host=DB_HOST, port=DB_PORT,
+        database=DB_NAME, user=DB_USER, password=DB_PASS
     )
 
 
 def init_db():
-    """Crea la tabla de feedback si no existe."""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS feedback (
-            id          INT AUTO_INCREMENT PRIMARY KEY,
-            nombre      VARCHAR(120),
-            email       VARCHAR(180),
-            comentario  TEXT NOT NULL,
-            creado_en   DATETIME DEFAULT CURRENT_TIMESTAMP
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            nombre     VARCHAR(120),
+            email      VARCHAR(180),
+            comentario TEXT NOT NULL,
+            creado_en  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
@@ -76,82 +71,55 @@ def get_s3_client():
     return session.client("s3")
 
 
-# ── ETIQUETAS ──────────────────────────────────────────────────
 LABEL_META = {
     "reciclable": {
-        "icono": "♻️",
-        "clase": "res-reciclable",
-        "desc": "Este residuo puede ser reciclado. Deposítalo en el contenedor correspondiente."
+        "icono": "♻️", "clase": "res-reciclable",
+        "desc": "Este residuo puede ser reciclado."
     },
     "organico": {
-        "icono": "🌱",
-        "clase": "res-organico",
+        "icono": "🌱", "clase": "res-organico",
         "desc": "Este residuo es de origen orgánico. Puede usarse para compostaje."
     },
     "no reciclable": {
-        "icono": "🗑️",
-        "clase": "res-no-reciclable",
+        "icono": "🗑️", "clase": "res-no-reciclable",
         "desc": "Este residuo no es reciclable. Deposítalo en la basura general."
     },
     "posiblemente reciclable": {
-        "icono": "🔄",
-        "clase": "res-posible",
-        "desc": "Podría ser reciclable dependiendo del municipio. Verifica antes de desechar."
+        "icono": "🔄", "clase": "res-posible",
+        "desc": "Podría ser reciclable dependiendo del municipio."
     },
 }
 
 def enriquecer_label(nombre_label):
-    """Agrega icono, clase CSS y descripción a un label de Rekognition."""
     key = nombre_label.lower().strip()
     meta = LABEL_META.get(key, {
-        "icono": "🔍",
-        "clase": "res-default",
+        "icono": "🔍", "clase": "res-default",
         "desc": "Residuo clasificado por el modelo."
     })
-    return {
-        "label": nombre_label,
-        "icono": meta["icono"],
-        "clase": meta["clase"],
-        "desc": meta["desc"]
-    }
+    return {"label": nombre_label, **meta}
 
-
-# ── ENDPOINTS ─────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Endpoint de salud para verificar que el servidor está corriendo."""
     return jsonify({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
 
 
 @app.route("/clasificar", methods=["POST"])
 def clasificar():
-    """
-    Recibe una imagen, la sube a S3 y la clasifica con Rekognition.
-    Retorna el label con mayor confianza.
-    """
     if "imagen" not in request.files:
         return jsonify({"error": "No se envió ninguna imagen."}), 400
 
     archivo = request.files["imagen"]
-    if archivo.filename == "":
-        return jsonify({"error": "El archivo no tiene nombre."}), 400
-
-    # Nombre único para evitar colisiones en S3
     extension = archivo.filename.rsplit(".", 1)[-1].lower()
     nombre_s3 = f"uploads/{uuid.uuid4().hex}.{extension}"
 
     try:
-        # 1. Subir imagen a S3
         s3 = get_s3_client()
         s3.upload_fileobj(
-            archivo,
-            S3_BUCKET,
-            nombre_s3,
+            archivo, S3_BUCKET, nombre_s3,
             ExtraArgs={"ContentType": archivo.content_type}
         )
 
-        # 2. Llamar a Rekognition
         rek = get_rekognition_client()
         response = rek.detect_custom_labels(
             Image={"S3Object": {"Bucket": S3_BUCKET, "Name": nombre_s3}},
@@ -165,11 +133,9 @@ def clasificar():
             return jsonify({
                 "detectado": False,
                 "mensaje": "No se detectó ningún residuo con suficiente confianza.",
-                "label": None,
-                "confianza": None
+                "label": None, "confianza": None
             })
 
-        # Tomar el label con mayor confianza
         mejor = max(labels, key=lambda x: x["Confidence"])
         meta = enriquecer_label(mejor["Name"])
 
@@ -193,9 +159,6 @@ def clasificar():
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
-    """
-    Recibe feedback del usuario y lo guarda en MySQL.
-    """
     data = request.get_json()
     if not data:
         return jsonify({"error": "No se recibieron datos."}), 400
@@ -204,11 +167,11 @@ def feedback():
     if not comentario:
         return jsonify({"error": "El comentario es obligatorio."}), 400
 
-    nombre    = data.get("nombre", "").strip() or None
-    email     = data.get("email", "").strip() or None
+    nombre = data.get("nombre", "").strip() or None
+    email  = data.get("email", "").strip() or None
 
     try:
-        conn   = get_db()
+        conn = get_db()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO feedback (nombre, email, comentario) VALUES (%s, %s, %s)",
@@ -224,17 +187,13 @@ def feedback():
 
 @app.route("/feedback", methods=["GET"])
 def listar_feedback():
-    """
-    Lista todos los feedbacks guardados (útil para revisarlos).
-    """
     try:
-        conn   = get_db()
+        conn = get_db()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT * FROM feedback ORDER BY creado_en DESC")
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        # Convertir datetime a string para serialización JSON
         for row in rows:
             if row.get("creado_en"):
                 row["creado_en"] = row["creado_en"].isoformat()
@@ -243,7 +202,6 @@ def listar_feedback():
         return jsonify({"error": str(e)}), 500
 
 
-# ── INICIO ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
     port = int(os.getenv("PORT", 5000))
