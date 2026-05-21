@@ -10,11 +10,11 @@ from datetime import datetime
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["https://kuosasco.github.io"])
 
 # ── Configuración AWS ──────────────────────────────────────────
-AWS_ACCESS_KEY    = os.getenv("AKIARNJ4OHXBMF53TZ6X")
-AWS_SECRET_KEY    = os.getenv("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")
+AWS_ACCESS_KEY    = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_KEY    = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION        = os.getenv("AWS_REGION", "us-east-1")
 S3_BUCKET         = os.getenv("S3_BUCKET")
 REKOGNITION_MODEL = os.getenv("REKOGNITION_MODEL_ARN")
